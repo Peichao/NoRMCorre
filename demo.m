@@ -13,19 +13,19 @@ if ~exist(name,'file')  % download file if it doesn't exist in the directory
 end
 
 tic; Y = read_file(name); toc; % read the file (optional, you can also pass the path in the function instead of Y)
-Y = double(Y);      % convert to double precision 
+Y = single(Y);                 % convert to single precision 
 T = size(Y,ndims(Y));
-%Y = Y - min(Y(:));
+Y = Y - min(Y(:));
 %% set parameters (first try out rigid motion correction)
 
-options_rigid = NoRMCorreSetParms('d1',size(Y,1),'d2',size(Y,2),'bin_width',50,'max_shift',15,'us_fac',50);
+options_rigid = NoRMCorreSetParms('d1',size(Y,1),'d2',size(Y,2),'bin_width',200,'max_shift',15,'us_fac',50,'init_batch',200);
 
 %% perform motion correction
-tic; [M1,shifts1,template1] = normcorre(Y,options_rigid); toc
+tic; [M1,shifts1,template1,options_rigid] = normcorre(Y,options_rigid); toc
 
 %% now try non-rigid motion correction (also in parallel)
-options_nonrigid = NoRMCorreSetParms('d1',size(Y,1),'d2',size(Y,2),'grid_size',[32,32],'mot_uf',4,'bin_width',50,'max_shift',15,'max_dev',3,'us_fac',50);
-tic; [M2,shifts2,template2] = normcorre_batch(Y,options_nonrigid); toc
+options_nonrigid = NoRMCorreSetParms('d1',size(Y,1),'d2',size(Y,2),'grid_size',[32,32],'mot_uf',4,'bin_width',200,'max_shift',15,'max_dev',3,'us_fac',50,'init_batch',200);
+tic; [M2,shifts2,template2,options_nonrigid] = normcorre_batch(Y,options_nonrigid); toc
 
 %% compute metrics
 
@@ -49,7 +49,7 @@ figure;
     linkaxes([ax1,ax2,ax3],'xy')
 %% plot shifts        
 
-shifts_r = horzcat(shifts1(:).shifts)';
+shifts_r = squeeze(cat(3,shifts1(:).shifts));
 shifts_nr = cat(ndims(shifts2(1).shifts)+1,shifts2(:).shifts);
 shifts_nr = reshape(shifts_nr,[],ndims(Y)-1,T);
 shifts_x = squeeze(shifts_nr(:,1,:))';

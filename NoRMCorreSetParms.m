@@ -15,19 +15,22 @@ Names = [
     'grid_size          ' % size of non-overlapping regions (default: [d1,d2,d3])
     'overlap_pre        ' % size of overlapping region (default: [32,32,16])
     'min_patch_size     ' % minimum size of patch (default: [32,32,16])    
+    'min_diff           ' % minimum difference between patches (default: [16,16,5])
     'us_fac             ' % upsampling factor for subpixel registration (default: 20)
     'mot_uf             ' % degree of patches upsampling (default: [4,4,1])
     'max_dev            ' % maximum deviation of patch shift from rigid shift (default: [3,3,1])
     'overlap_post       ' % size of overlapping region after upsampling (default: [32,32,16])
-    'max_shift          ' % maximum rigid shift in each direction (default: [10,10,5])
+    'max_shift          ' % maximum rigid shift in each direction (default: [15,15,5])
     'phase_flag         ' % flag for using phase correlation (default: false)
+    'shifts_method      ' % method to apply shifts ('FFT','cubic','linear')
     % template updating
     'upd_template       ' % flag for online template updating (default: true)
-    'init_batch         ' % length of initial batch (default: 30)
+    'init_batch         ' % length of initial batch (default: 100)
     'bin_width          ' % width of each bin (default: 10)
     'buffer_width       ' % number of local means to keep in memory (default: 50)
-    'method             ' % method for averaging the template (default: {'median';'mean
+    'method             ' % method for averaging the template (default: {'median';'mean})
     'iter               ' % number of data passes (default: 1)
+    'boundary           ' % method of boundary treatment 'NaN','copy','zero','template' (default: 'copy')
     % misc
     'add_value          ' % add dc value to data (default: 0)
     'use_parallel       ' % for each frame, update patches in parallel (default: false)
@@ -44,12 +47,18 @@ Names = [
     'h5_groupname       ' % name for hdf5 dataset (default: 'mov')
     'h5_filename        ' % name for hdf5 saved file (default: 'motion_corrected.h5')
     'tiff_filename      ' % name for saved tiff stack (default: 'motion_corrected.tif')
+    'output_filename    ' % name for saved file will be used if `h5_,tiff_filename` are not specified
     % use windowing
     'use_windowing      ' % flag for windowing data before fft (default: false)
     'window_length      ' % length of window on each side of the signal as a fraction of signal length
                            %    total length = length(signal)(1 + 2*window_length). (default: 0.5)
     % bitsize for reading .raw files
     'bitsize            ' % (default: 2 (uint16). other choices 1 (uint8), 4 (single), 8 (double))
+    % offset from bidirectional sampling
+    'correct_bidir      ' % check for offset due to bidirectional scanning (default: true)
+    'nFrames            ' % number of frames to average (default: 50)
+    'bidir_us           ' % upsampling factor for bidirectional sampling (default: 10)
+    'col_shift          ' % known bi-directional offset provided by the user (default: [])
    ]; 
    
 [m,n] = size(Names);
@@ -138,19 +147,22 @@ Values = [
     {[]}                  % size of non-overlapping regions (default: [d1,d2,d3])
     {[32,32,16]}          % size of overlapping region (default: [32,32,16])
     {[32,32,16]}          % minimum size of patch (default: [32,32,16])    
-    {20}                  % upsampling factor for subpixel registration (default: 20)
+    {[16,16,5]}           % minimum difference between patches (default: [16,16,5])
+    {50}                  % upsampling factor for subpixel registration (default: 50)
     {[4,4,1]}             % degree of patches upsampling (default: [4,4,1])
     {[3,3,1]}             % maximum deviation of patch shift from rigid shift (default: [3,3,1])
     {[32,32,16]}          % size of overlapping region after upsampling (default: [32,32,16])
-    {[10,10,5]}           % maximum rigid shift in each direction
-    {false}
+    {[15,15,5]}           % maximum rigid shift in each direction
+    {false}               % use phase correlation (good for high SNR)
+    {'FFT'}               % method for applying shifts ('FFT', 'linear', 'cubic')
     % template updating
     {true}                % flag for online template updating (default: true)
-    {30}                  % length of initial batch (default: 30)
-    {10}                  % width of each bin (default: 10)
+    {100}                 % length of initial batch (default: 100)
+    {50}                  % width of each bin (default: 10)
     {50}                  % number of local means to keep in memory (default: 50)
     {{'median';'mean'}}   % method for averaging the template (default: {'median';'mean'}
     {1}                   % number of data passes (default: 1)
+    {'copy'}              % method of boundary treatment (default: 'copy')
     % misc
     {0}                   % add dc value to data (default: 0)
     {false}               % for each frame, update patches in parallel (default: false)
@@ -167,11 +179,17 @@ Values = [
     {'mov'}
     {'motion_corrected.h5'}
     {'motion_corrected.tif'}
+    {''}
     % use_windowing
     {false}
     {0.5}
     % bitsize for reading .raw files
     {2}
+    % offset from bidirectional sampling
+    {true}
+    {50}
+    {10}
+    {[]}
     ];
 
 for j = 1:m
@@ -180,12 +198,28 @@ for j = 1:m
     end
 end
 
+if ~isempty(options.output_filename)
+    out_type = options.output_type;
+    [filepath,name,~] = fileparts(options.output_filename);
+    output_filename = fullfile(filepath,name);
+    if strcmpi(options.h5_filename,'motion_corrected.h5') && (strcmpi(out_type,'h5') || strcmpi(out_type,'hdf5'))
+        options.h5_filename = [output_filename,'.h5'];
+    end
+    if strcmpi(options.tiff_filename,'motion_corrected.tif') && (strcmpi(out_type,'tif') || strcmpi(out_type,'tiff'))
+        options.tiff_filename = [output_filename,'.tif'];
+    end    
+end
+
 if isempty(options.d1); options.d1 = input('What is the total number of rows? \n'); end
 if isempty(options.d2); options.d2 = input('What is the total number of columns? \n'); end
 %if options.d3 == 1; nd = 2; else nd = 3; end
 if isempty(options.grid_size); options.grid_size = [options.d1,options.d2,options.d3]; end
 if length(options.grid_size) == 1; options.grid_size = options.grid_size*ones(1,3); end
 if length(options.grid_size) == 2; options.grid_size(3) = 1; end
+if length(options.min_patch_size) == 1; options.min_patch_size = options.min_patch_size*ones(1,3); end
+if length(options.min_patch_size) == 2; options.min_patch_size(3) = 1; end
+if length(options.min_diff) == 1; options.min_diff = options.min_diff*ones(1,3); end
+if length(options.min_diff) == 2; options.min_diff(3) = 1; end
 if length(options.overlap_pre) == 1; options.overlap_pre = options.overlap_pre*ones(1,3); end
 if length(options.overlap_pre) == 2; options.overlap_pre(3) = 1; end
 if length(options.overlap_post) == 1; options.overlap_post = options.overlap_post*ones(1,3); end
